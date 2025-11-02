@@ -2,7 +2,7 @@
 //  BaseVerifierApp.swift
 //  BaseVerifier
 //
-//  Created by Byul Kang on 2025/11/03.
+//  Created by Byul Kang
 //
 
 import SwiftUI
@@ -13,5 +13,7 @@ struct BaseVerifierApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
     }
 }
