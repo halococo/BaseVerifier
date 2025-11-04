@@ -1,9 +1,8 @@
-//
 //  BaseVerifier.swift
 //  BaseVerifier
 //
 //  Created by Byul Kang
-//  Core engine: 64-bit deterministic Miller–Rabin, safe 128-bit mul via fullWidth
+//  Core engine: 64-bit deterministic Millerâ€“Rabin, safe 128-bit mul via fullWidth
 //
 import Foundation
 import Combine
@@ -40,7 +39,7 @@ final class BaseVerifier: ObservableObject {
         if logLines.count > 200 { logLines.removeFirst(logLines.count - 200) }
     }
 
-    func start(base: UInt64, limit: UInt64, threads: Int) {
+    func start(base: UInt64, startFrom: UInt64, limit: UInt64, threads: Int) {
         stop() // clean up previous
         progress = 0
         primesChecked = 0
@@ -48,9 +47,9 @@ final class BaseVerifier: ObservableObject {
         violationFound = false
         isRunning = true
         stopBox.set(false)
-        appendLog("🚀 Start: base=\(base), limit=\(limit.formatted()), threads=\(threads > 0 ? threads : -1)")
+        appendLog("ðŸš€ Start: base=\(base), range=\(startFrom.formatted())...\(limit.formatted()), threads=\(threads > 0 ? threads : -1)")
 
-        task = Task { await run(base: base, limit: limit, threads: threads) }
+        task = Task { await run(base: base, startFrom: startFrom, limit: limit, threads: threads) }
     }
 
     func stop() {
@@ -59,10 +58,16 @@ final class BaseVerifier: ObservableObject {
         task = nil
     }
 
-    private func run(base: UInt64, limit: UInt64, threads: Int) async {
+    private func run(base: UInt64, startFrom: UInt64, limit: UInt64, threads: Int) async {
+        // Guard against invalid ranges
+        guard startFrom <= limit else {
+            await MainActor.run { self.statusLine = "âš ï¸ Invalid range: start > limit" }
+            return
+        }
         let started = Date()
         let t = threads > 0 ? threads : max(1, ProcessInfo.processInfo.activeProcessorCount)
-        let chunk = max<UInt64>(1, limit / UInt64(t))
+        let totalRange = limit - startFrom + 1
+        let chunk = max<UInt64>(1, totalRange / UInt64(t))
 
         // shared counters (protected by lock)
         var globalProcessed: UInt64 = 0
@@ -76,13 +81,27 @@ final class BaseVerifier: ObservableObject {
 
         await withTaskGroup(of: Void.self) { group in
             for i in 0..<t {
-                let start = UInt64(i) * chunk + (i == 0 ? 2 : 1)
-                let end   = (i == t - 1) ? limit : (UInt64(i + 1) * chunk - 1)
+                let start = startFrom + UInt64(i) * chunk
+                let end   = (i == t - 1) ? limit : (startFrom + UInt64(i + 1) * chunk - 1)
 
                 group.addTask { [stepBatch, stopBox] in
                     var processed: UInt64 = 0
                     var localPrimes: UInt64 = 0
                     var n = start
+                    // Handle 2 once, then scan odd numbers only for speed
+                    if n <= 2 && 2 <= end {
+                        if Math.isPrime64(2) {
+                            localPrimes &+= 1
+                            let s = Math.digitSum(2, base: base)
+                            if !Math.isValidDigitSum(s) {
+                                let fac = Math.factorizationString(of: s)
+                                lock.lock(); if first == nil { first = Hit(p: 2, s: s, fac: fac) }; lock.unlock()
+                            }
+                        }
+                        processed &+= 1 // count '2' in progress
+                        n = max(n, 3)
+                    }
+                    if n % 2 == 0 { n &+= 1 }
 
                     while n <= end {
                         if Task.isCancelled || stopBox.get() { break }
@@ -99,14 +118,18 @@ final class BaseVerifier: ObservableObject {
                             }
                         }
 
-                        processed &+= 1
-                        n &+= 1
+                        // Advance by two (odd-only) and count *range* items processed
+                        let nextN = n &+ 2
+                        // inc = number of integers consumed in [n, nextN)
+                        let inc: UInt64 = (nextN <= end + 1) ? 2 : (end &- n &+ 1)
+                        processed &+= inc
+                        n = nextN
 
                         if (processed % stepBatch) == 0 || n > end {
                             lock.lock()
                             globalProcessed &+= processed
                             globalPrimes    &+= localPrimes
-                            let raw = min(1.0, Double(globalProcessed) / Double(max(1, limit - 1)))
+                            let raw = min(1.0, Double(globalProcessed) / Double(max(1, totalRange)))
                             if raw > lastProgress { lastProgress = raw }
                             let prog = lastProgress
                             let primesNow = globalPrimes
@@ -138,12 +161,12 @@ final class BaseVerifier: ObservableObject {
 
         if let v = first {
             violationFound = true
-            statusLine = "❌ Violation: p=\(v.p)  S(p)=\(v.s)  (\(v.fac))"
+            statusLine = "âŒ Violation: p=\(v.p)  S(p)=\(v.s)  (\(v.fac))"
             appendLog(statusLine)
         } else {
             violationFound = false
-            statusLine = "✅ No violations found up to \(limit.formatted())."
-            appendLog("Done in \(String(format: "%.2f", elapsed)) s – primes: \(primesChecked.formatted())")
+            statusLine = "âœ… No violations found in range \(startFrom.formatted())...\(limit.formatted())."
+            appendLog("Done in \(String(format: "%.2f", elapsed)) s â€“ primes: \(primesChecked.formatted())")
         }
     }
 }
@@ -197,7 +220,7 @@ enum Math {
         return false
     }
 
-    // Deterministic Miller–Rabin for 64-bit
+    // Deterministic Millerâ€“Rabin for 64-bit
     static func isPrime64(_ n: UInt64) -> Bool {
         if n < 2 { return false }
 
@@ -254,6 +277,7 @@ enum Math {
             p = (p == 2) ? 3 : (p + 2)
         }
         if m > 1 { parts.append(String(m)) }
-        return "\(n) = " + parts.joined(separator: " × ")
+        return "\(n) = " + parts.joined(separator: " Ã— ")
     }
 }
+

@@ -1,8 +1,7 @@
-//
 //  ContentView.swift
 //  BaseVerifier
 //
-//  Created by Byul Kang 
+//  Created by Byul Kang
 //
 import SwiftUI
 import Combine
@@ -11,6 +10,7 @@ struct ContentView: View {
     @StateObject private var vm = BaseVerifier()
 
     @State private var baseText: String = "31"
+    @State private var startText: String = "2"
     @State private var limitText: String = "1000000"
     @State private var checkPrimeText: String = "31"
 
@@ -33,7 +33,9 @@ struct ContentView: View {
         guard let b = UInt64(baseText) else { return "base must be an integer ≥ 2" }
         if b < 2 { return "base must be ≥ 2" }
         if !Math.isPrime64(b) { return "base must be a PRIME" }
+        guard let start = UInt64(startText), start >= 2 else { return "start must be an integer ≥ 2" }
         guard let limit = UInt64(limitText), limit >= 10 else { return "limit must be an integer ≥ 10" }
+        if start > limit { return "start must be ≤ limit" }
         if vm.isRunning { return "already running" }
         return nil
     }
@@ -43,57 +45,74 @@ struct ContentView: View {
             header
 
             GroupBox {
-                HStack(alignment: .firstTextBaseline, spacing: 16) {
-                    HStack {
-                        Text("Base").frame(width: 90, alignment: .leading)
-                        TextField("prime base (e.g. 7, 13…)", text: $baseText)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 180)
-                            .disabled(vm.isRunning)
-                            .onReceive(Just(baseText)) { _ in baseText = baseText.filter(\.isNumber) }
-                    }
-                    HStack {
-                        Text("Limit").frame(width: 90, alignment: .leading)
-                        TextField("upper bound", text: $limitText)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 220)
-                            .disabled(vm.isRunning)
-                            .onReceive(Just(limitText)) { _ in limitText = limitText.filter(\.isNumber) }
-                        ForEach([("1M","1000000"),("10M","10000000"),("100M","100000000"),("1B","1000000000")], id: \.0) { t in
-                            Button(t.0) { limitText = t.1 }.buttonStyle(.bordered).disabled(vm.isRunning)
+                VStack(spacing: 12) {
+                    // 첫 번째 줄: Base, Start, Limit
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        HStack {
+                            Text("Base").frame(width: 70, alignment: .leading)
+                            TextField("prime base", text: $baseText)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 120)
+                                .disabled(vm.isRunning)
+                                .onReceive(Just(baseText)) { _ in baseText = baseText.filter(\.isNumber) }
+                        }
+                        HStack {
+                            Text("Start").frame(width: 70, alignment: .leading)
+                            TextField("start from", text: $startText)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 140)
+                                .disabled(vm.isRunning)
+                                .onReceive(Just(startText)) { _ in startText = startText.filter(\.isNumber) }
+                        }
+                        HStack {
+                            Text("Limit").frame(width: 70, alignment: .leading)
+                            TextField("upper bound", text: $limitText)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 140)
+                                .disabled(vm.isRunning)
+                                .onReceive(Just(limitText)) { _ in limitText = limitText.filter(\.isNumber) }
+                            ForEach([("1M","1000000"),("10M","10000000"),("100M","100000000"),("1B","1000000000")], id: \.0) { t in
+                                Button(t.0) { limitText = t.1 }.buttonStyle(.bordered).disabled(vm.isRunning)
+                            }
                         }
                     }
-                    HStack {
-                        Text("Concurrency").frame(width: 100, alignment: .leading)
-                        Picker("", selection: $concurrency) {
-                            ForEach(ConcurrencyChoice.allCases) { c in Text(c.rawValue).tag(c) }
-                        }
-                        .frame(width: 120)
-                        .disabled(vm.isRunning)
-                        .help("""
-                        How many worker threads to use.
-                        • auto: use system cores (recommended)
-                        • x1: single thread (safest)
-                        • x2 / x4: more threads; may run hotter
-                        """)
-                    }
-                    Button {
-                        if vm.isRunning { vm.stop() } else { startVerification() }
-                    } label: {
-                        Label(vm.isRunning ? "Stop" : "Start",
-                              systemImage: vm.isRunning ? "stop.circle.fill" : "play.circle.fill")
+                    
+                    // 두 번째 줄: Concurrency, Start/Stop button
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        HStack {
+                            Text("Concurrency").frame(width: 100, alignment: .leading)
+                            Picker("", selection: $concurrency) {
+                                ForEach(ConcurrencyChoice.allCases) { c in Text(c.rawValue).tag(c) }
+                            }
                             .frame(width: 120)
+                            .disabled(vm.isRunning)
+                            .help("""
+                            How many worker threads to use.
+                            • auto: use system cores (recommended)
+                            • x1: single thread (safest)
+                            • x2 / x4: more threads; may run hotter
+                            """)
+                        }
+                        Spacer()
+                        Button {
+                            if vm.isRunning { vm.stop() } else { startVerification() }
+                        } label: {
+                            Label(vm.isRunning ? "Stop" : "Start",
+                                  systemImage: vm.isRunning ? "stop.circle.fill" : "play.circle.fill")
+                                .frame(width: 120)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(vm.isRunning ? .red : .green)
+                        .disabled(startDisabledReason != nil)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(vm.isRunning ? .red : .green)
-                    .disabled(startDisabledReason != nil)
-                }
 
-                HStack {
-                    ProgressView(value: vm.progress).frame(maxWidth: .infinity)
-                    Text("Primes: \(vm.primesChecked.formatted())")
-                        .font(.caption).foregroundColor(.secondary)
-                }.padding(.top, 4)
+                    // Progress bar
+                    HStack {
+                        ProgressView(value: vm.progress).frame(maxWidth: .infinity)
+                        Text("Primes: \(vm.primesChecked.formatted())")
+                            .font(.caption).foregroundColor(.secondary)
+                    }.padding(.top, 4)
+                }
             }
 
             // MARK: Results
@@ -103,14 +122,14 @@ struct ContentView: View {
                         Text(vm.statusLine)
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(vm.violationFound ? .red : .green)
-                            .textSelection(.enabled) // ✅ 복사 가능
+                            .textSelection(.enabled)
                     }
                     
                     ForEach(vm.logLines.suffix(8), id: \.self) { line in
                         Text(line)
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
-                            .textSelection(.enabled) // ✅ 복사 가능
+                            .textSelection(.enabled)
                     }
                 }
             }
@@ -149,7 +168,10 @@ struct ContentView: View {
     }
 
     private func startVerification() {
-        guard let b = UInt64(baseText), let limit = UInt64(limitText) else { return }
-        vm.start(base: b, limit: limit, threads: concurrency.threads)
+        guard let b = UInt64(baseText),
+              let start = UInt64(startText),
+              let limit = UInt64(limitText) else { return }
+        vm.start(base: b, startFrom: start, limit: limit, threads: concurrency.threads)
     }
 }
+
