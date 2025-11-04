@@ -39,7 +39,6 @@ every prime \(p\) satisfies the following property:
 4. Add these files from the repository:
    - `BaseVerifier.swift`
    - `ContentView.swift`
-   - *(Optional)* `Utils.swift` if present
 5. Press **⌘R** to build and run
 
 ---
