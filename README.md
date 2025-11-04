@@ -77,7 +77,7 @@ Released under the **MIT License** — freely usable for academic and personal r
 ---
 
 <p align="center">
-  <a href="https://doi.org/10.5281/zenodo.17514666">
-    <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.17514666.svg" alt="DOI Badge">
+  <a href="https://doi.org/10.5281/zenodo.17518629">
+    <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.17518629.svg" alt="DOI Badge">
   </a>
 </p>
