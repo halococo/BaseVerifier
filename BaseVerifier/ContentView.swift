@@ -2,227 +2,180 @@
 //  ContentView.swift
 //  BaseVerifier
 //
-//  Created by Byul Kang
+//  Created by Byul Kang 
 //
 
 import SwiftUI
+import Combine
 
 struct ContentView: View {
-    @StateObject private var verifier = BaseVerifier()
-    
-    @State private var selectedBase: Int = 19
-    @State private var testLimit: String = "1000000000"
-    @State private var isRunning = false
-    
-    let availableBases = [7, 13, 19, 31, 37, 43, 61, 211, 421]
-    
+    @StateObject private var vm = BaseVerifier()
+
+    @State private var baseText: String = "31"
+    @State private var limitText: String = "1000000"
+    @State private var running = false
+
+    // Prime checker
+    @State private var checkPrimeText: String = "31"
+    @State private var checkResult: String = ""
+
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 22) {
             // Header
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Text("Prime Base Verifier")
                     .font(.system(size: 28, weight: .bold))
-                
-                Text("Refined Conjecture with Prime Powers")
+                Text("Digit-sum conjecture including prime powers")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                Link("Paper: doi.org/10.5281/zenodo.17502674",
-                     destination: URL(string: "https://doi.org/10.5281/zenodo.17502674")!)
+                    .foregroundStyle(.secondary)
+                Link("Source code (GitHub)", destination: URL(string: "https://github.com/halococo/BaseVerifier")!)
                     .font(.caption)
             }
-            .padding()
-            
-            Divider()
-            
-            // Settings
-            VStack(alignment: .leading, spacing: 15) {
-                Text("Settings")
-                    .font(.headline)
-                
-                // Base Selection
-                HStack {
-                    Text("Base:")
-                        .frame(width: 100, alignment: .leading)
-                    
-                    Picker("", selection: $selectedBase) {
-                        ForEach(availableBases, id: \.self) { base in
-                            Text("Base-\(base)").tag(base)
-                        }
+            .padding(.top, 8)
+
+            // Controls
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Base")
+                            .frame(width: 80, alignment: .leading)
+                        TextField("Enter base (prime ≥ 2)", text: $baseText)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(running)
+                            .frame(width: 220)
+                        Spacer()
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 150)
-                    .disabled(isRunning)
-                    
-                    if selectedBase == 19 {
-                        Text("⭐ Revival Candidate!")
+
+                    HStack {
+                        Text("Limit")
+                            .frame(width: 80, alignment: .leading)
+                        TextField("Upper bound (e.g. 1000000000)", text: $limitText)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(running)
+                            .frame(width: 220)
+
+                        HStack(spacing: 8) {
+                            Button("1M") { limitText = "1000000" }.disabled(running)
+                            Button("10M") { limitText = "10000000" }.disabled(running)
+                            Button("100M") { limitText = "100000000" }.disabled(running)
+                            Button("1B") { limitText = "1000000000" }.disabled(running)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    // Only domain warning (no candidate whitelist)
+                    HStack {
+                        if let base = UInt64(baseText), !BaseVerifier.isPrime64(base) {
+                            Label("Base must be prime for this conjecture.", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        Spacer()
+                    }
+
+                    HStack(spacing: 12) {
+                        Button(action: toggle) {
+                            Label(running ? "Stop" : "Start", systemImage: running ? "stop.fill" : "play.fill")
+                                .frame(width: 120)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(running ? .red : .green)
+                        .disabled(!canRun)
+
+                        ProgressView(value: vm.progress)
+                            .frame(maxWidth: .infinity)
+                        Text("Primes: \(vm.primesChecked.formatted())")
                             .font(.caption)
-                            .foregroundColor(.orange)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                
-                // Test Limit
-                HStack {
-                    Text("Test Limit:")
-                        .frame(width: 100, alignment: .leading)
-                    
-                    TextField("Limit", text: $testLimit)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 150)
-                        .disabled(isRunning)
-                    
-                    Text(formatNumber(testLimit))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                // Quick Presets
-                HStack {
-                    Text("Quick:")
-                        .frame(width: 100, alignment: .leading)
-                    
-                    Button("1M") { testLimit = "1000000" }
-                        .disabled(isRunning)
-                    Button("10M") { testLimit = "10000000" }
-                        .disabled(isRunning)
-                    Button("100M") { testLimit = "100000000" }
-                        .disabled(isRunning)
-                    Button("1B") { testLimit = "1000000000" }
-                        .disabled(isRunning)
-                }
-                .buttonStyle(.bordered)
             }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
-            
-            // Progress
-            if isRunning {
-                VStack(spacing: 10) {
-                    ProgressView(value: verifier.progress) {
-                        HStack {
-                            Text("Testing Base-\(selectedBase)...")
-                            Spacer()
-                            Text("\(Int(verifier.progress * 100))%")
-                        }
-                    }
-                    
-                    Text("Primes tested: \(verifier.primesChecked.formatted())")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Control Button
-            Button(action: toggleVerification) {
-                Label(
-                    isRunning ? "Stop" : "Start Verification",
-                    systemImage: isRunning ? "stop.circle.fill" : "play.circle.fill"
-                )
-                .frame(width: 200)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(isRunning ? .red : .green)
-            .disabled(testLimit.isEmpty)
-            
-            Divider()
-            
+
             // Results
-            ScrollView {
+            GroupBox("Results") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Results")
-                        .font(.headline)
-                    
-                    if verifier.violations.isEmpty && verifier.isCompleted {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("✅ No violations found!")
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundColor(.green)
+                    HStack {
+                        if vm.violations.isEmpty && vm.done {
+                            Label("No violations found up to \(formattedLimit()).", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else if vm.violations.isEmpty {
+                            Label("Running…", systemImage: "hourglass")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Label("\(vm.violations.count) violation(s) found.", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
                         }
-                        
-                        Text("Base-\(selectedBase) satisfies the refined conjecture up to \(verifier.testedLimit.formatted())")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.top, 4)
-                    } else if !verifier.violations.isEmpty {
-                        ForEach(verifier.violations, id: \.prime) { violation in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.red)
-                                    Text("VIOLATION FOUND!")
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundColor(.red)
-                                        .bold()
-                                }
-                                
-                                Text("Prime (p): \(violation.prime.formatted())")
-                                    .font(.system(.caption, design: .monospaced))
-                                
-                                Text("S\(selectedBase)(p) = \(violation.digitSum)")
-                                    .font(.system(.caption, design: .monospaced))
-                                
-                                Text("Factorization: \(violation.factorization)")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding()
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                    } else {
-                        Text("Click 'Start Verification' to begin testing")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Spacer()
                     }
-                    
-                    // Log messages
-                    ForEach(verifier.logMessages.suffix(10), id: \.self) { message in
-                        Text(message)
+
+                    if !vm.statusLine.isEmpty {
+                        Text(vm.statusLine)
                             .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    ForEach(vm.violations) { v in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("p = \(v.prime)")
+                            Text("digit sum = \(v.digitSum)")
+                            Text(v.factorization)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color.red.opacity(0.07))
+                        .cornerRadius(8)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 250)
-            .padding()
-            .background(Color.gray.opacity(0.05))
-            .cornerRadius(8)
+
+            // Prime check tool
+            GroupBox("Check prime") {
+                HStack {
+                    TextField("Enter n", text: $checkPrimeText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                    Button("Check") {
+                        if let x = UInt64(checkPrimeText) {
+                            checkResult = BaseVerifier.isPrime64(x) ? "Prime" : "Composite"
+                        } else {
+                            checkResult = "Invalid"
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    Text(checkResult)
+                        .foregroundStyle(checkResult == "Prime" ? .green : .primary)
+                    Spacer()
+                }
+            }
+
+            Spacer(minLength: 6)
         }
-        .padding()
-        .frame(minWidth: 700, minHeight: 700)
+        .padding(20)
+        .frame(minWidth: 760, minHeight: 640)
     }
-    
-    func toggleVerification() {
-        if isRunning {
-            verifier.stop()
-            isRunning = false
+
+    private var canRun: Bool {
+        guard let base = UInt64(baseText), let limit = UInt64(limitText) else { return false }
+        if limit < 2 { return false }
+        // Only domain restriction: base must be prime (composite bases are outside the conjecture)
+        if !BaseVerifier.isPrime64(base) { return false }
+        return !running
+    }
+
+    private func toggle() {
+        if running {
+            vm.stop()
+            running = false
         } else {
-            guard let limit = Int(testLimit) else { return }
-            isRunning = true
-            verifier.start(base: selectedBase, limit: limit)
+            guard let base = UInt64(baseText), let limit = UInt64(limitText) else { return }
+            running = true
+            vm.start(base: base, limit: limit)
         }
     }
-    
-    func formatNumber(_ str: String) -> String {
-        guard let num = Int(str) else { return "" }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: num)) ?? ""
+
+    private func formattedLimit() -> String {
+        guard let n = UInt64(limitText) else { return limitText }
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
-}
-
-// MARK: - Violation Model
-struct Violation: Identifiable {
-    let id = UUID()
-    let prime: Int
-    let digitSum: Int
-    let factorization: String
-}
-
-#Preview {
-    ContentView()
 }
