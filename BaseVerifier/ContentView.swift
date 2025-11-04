@@ -96,18 +96,22 @@ struct ContentView: View {
                 }.padding(.top, 4)
             }
 
+            // MARK: Results
             GroupBox("Results") {
-                if let reason = startDisabledReason, !vm.isRunning {
-                    Text("Cannot start: \(reason)").font(.caption).foregroundColor(.orange)
-                }
-                if !vm.statusLine.isEmpty {
-                    Text(vm.statusLine)
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundColor(vm.violationFound ? .red : .green)
-                        .padding(.bottom, 4)
-                }
-                ForEach(vm.logLines.suffix(8), id: \.self) { line in
-                    Text(line).font(.system(.caption, design: .monospaced)).foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    if !vm.statusLine.isEmpty {
+                        Text(vm.statusLine)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(vm.violationFound ? .red : .green)
+                            .textSelection(.enabled) // ✅ 복사 가능
+                    }
+                    
+                    ForEach(vm.logLines.suffix(8), id: \.self) { line in
+                        Text(line)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled) // ✅ 복사 가능
+                    }
                 }
             }
 
