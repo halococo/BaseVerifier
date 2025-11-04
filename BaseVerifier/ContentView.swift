@@ -4,7 +4,6 @@
 //
 //  Created by Byul Kang 
 //
-
 import SwiftUI
 import Combine
 
@@ -13,169 +12,140 @@ struct ContentView: View {
 
     @State private var baseText: String = "31"
     @State private var limitText: String = "1000000"
-    @State private var running = false
-
-    // Prime checker
     @State private var checkPrimeText: String = "31"
-    @State private var checkResult: String = ""
+
+    enum ConcurrencyChoice: String, CaseIterable, Identifiable {
+        case auto = "auto", x1 = "x1", x2 = "x2", x4 = "x4"
+        var id: String { rawValue }
+        var threads: Int { self == .auto ? 0 : Int(String(rawValue.dropFirst())) ?? 1 }
+    }
+    @State private var concurrency: ConcurrencyChoice = .auto
+
+    private func isPrimeSmall(_ n: Int) -> Bool {
+        if n < 2 { return false }
+        if n % 2 == 0 { return n == 2 }
+        var i = 3
+        while i * i <= n { if n % i == 0 { return false }; i += 2 }
+        return true
+    }
+
+    private var startDisabledReason: String? {
+        guard let b = UInt64(baseText) else { return "base must be an integer ≥ 2" }
+        if b < 2 { return "base must be ≥ 2" }
+        if !Math.isPrime64(b) { return "base must be a PRIME" }
+        guard let limit = UInt64(limitText), limit >= 10 else { return "limit must be an integer ≥ 10" }
+        if vm.isRunning { return "already running" }
+        return nil
+    }
 
     var body: some View {
-        VStack(spacing: 22) {
-            // Header
-            VStack(spacing: 6) {
-                Text("Prime Base Verifier")
-                    .font(.system(size: 28, weight: .bold))
-                Text("Digit-sum conjecture including prime powers")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Link("Source code (GitHub)", destination: URL(string: "https://github.com/halococo/BaseVerifier")!)
-                    .font(.caption)
-            }
-            .padding(.top, 8)
+        VStack(alignment: .leading, spacing: 18) {
+            header
 
-            // Controls
             GroupBox {
-                VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
                     HStack {
-                        Text("Base")
-                            .frame(width: 80, alignment: .leading)
-                        TextField("Enter base (prime ≥ 2)", text: $baseText)
+                        Text("Base").frame(width: 90, alignment: .leading)
+                        TextField("prime base (e.g. 7, 13…)", text: $baseText)
                             .textFieldStyle(.roundedBorder)
-                            .disabled(running)
-                            .frame(width: 220)
-                        Spacer()
+                            .frame(width: 180)
+                            .disabled(vm.isRunning)
+                            .onReceive(Just(baseText)) { _ in baseText = baseText.filter(\.isNumber) }
                     }
-
                     HStack {
-                        Text("Limit")
-                            .frame(width: 80, alignment: .leading)
-                        TextField("Upper bound (e.g. 1000000000)", text: $limitText)
+                        Text("Limit").frame(width: 90, alignment: .leading)
+                        TextField("upper bound", text: $limitText)
                             .textFieldStyle(.roundedBorder)
-                            .disabled(running)
                             .frame(width: 220)
-
-                        HStack(spacing: 8) {
-                            Button("1M") { limitText = "1000000" }.disabled(running)
-                            Button("10M") { limitText = "10000000" }.disabled(running)
-                            Button("100M") { limitText = "100000000" }.disabled(running)
-                            Button("1B") { limitText = "1000000000" }.disabled(running)
+                            .disabled(vm.isRunning)
+                            .onReceive(Just(limitText)) { _ in limitText = limitText.filter(\.isNumber) }
+                        ForEach([("1M","1000000"),("10M","10000000"),("100M","100000000"),("1B","1000000000")], id: \.0) { t in
+                            Button(t.0) { limitText = t.1 }.buttonStyle(.bordered).disabled(vm.isRunning)
                         }
-                        .buttonStyle(.bordered)
                     }
-
-                    // Only domain warning (no candidate whitelist)
                     HStack {
-                        if let base = UInt64(baseText), !BaseVerifier.isPrime64(base) {
-                            Label("Base must be prime for this conjecture.", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
+                        Text("Concurrency").frame(width: 100, alignment: .leading)
+                        Picker("", selection: $concurrency) {
+                            ForEach(ConcurrencyChoice.allCases) { c in Text(c.rawValue).tag(c) }
                         }
-                        Spacer()
+                        .frame(width: 120)
+                        .disabled(vm.isRunning)
+                        .help("""
+                        How many worker threads to use.
+                        • auto: use system cores (recommended)
+                        • x1: single thread (safest)
+                        • x2 / x4: more threads; may run hotter
+                        """)
                     }
-
-                    HStack(spacing: 12) {
-                        Button(action: toggle) {
-                            Label(running ? "Stop" : "Start", systemImage: running ? "stop.fill" : "play.fill")
-                                .frame(width: 120)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(running ? .red : .green)
-                        .disabled(!canRun)
-
-                        ProgressView(value: vm.progress)
-                            .frame(maxWidth: .infinity)
-                        Text("Primes: \(vm.primesChecked.formatted())")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Button {
+                        if vm.isRunning { vm.stop() } else { startVerification() }
+                    } label: {
+                        Label(vm.isRunning ? "Stop" : "Start",
+                              systemImage: vm.isRunning ? "stop.circle.fill" : "play.circle.fill")
+                            .frame(width: 120)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(vm.isRunning ? .red : .green)
+                    .disabled(startDisabledReason != nil)
                 }
-            }
 
-            // Results
-            GroupBox("Results") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        if vm.violations.isEmpty && vm.done {
-                            Label("No violations found up to \(formattedLimit()).", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        } else if vm.violations.isEmpty {
-                            Label("Running…", systemImage: "hourglass")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Label("\(vm.violations.count) violation(s) found.", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                        }
-                        Spacer()
-                    }
-
-                    if !vm.statusLine.isEmpty {
-                        Text(vm.statusLine)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    ForEach(vm.violations) { v in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("p = \(v.prime)")
-                            Text("digit sum = \(v.digitSum)")
-                            Text(v.factorization)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(8)
-                        .background(Color.red.opacity(0.07))
-                        .cornerRadius(8)
-                    }
-                }
-            }
-
-            // Prime check tool
-            GroupBox("Check prime") {
                 HStack {
-                    TextField("Enter n", text: $checkPrimeText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
-                    Button("Check") {
-                        if let x = UInt64(checkPrimeText) {
-                            checkResult = BaseVerifier.isPrime64(x) ? "Prime" : "Composite"
-                        } else {
-                            checkResult = "Invalid"
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    Text(checkResult)
-                        .foregroundStyle(checkResult == "Prime" ? .green : .primary)
-                    Spacer()
+                    ProgressView(value: vm.progress).frame(maxWidth: .infinity)
+                    Text("Primes: \(vm.primesChecked.formatted())")
+                        .font(.caption).foregroundColor(.secondary)
+                }.padding(.top, 4)
+            }
+
+            GroupBox("Results") {
+                if let reason = startDisabledReason, !vm.isRunning {
+                    Text("Cannot start: \(reason)").font(.caption).foregroundColor(.orange)
+                }
+                if !vm.statusLine.isEmpty {
+                    Text(vm.statusLine)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(vm.violationFound ? .red : .green)
+                        .padding(.bottom, 4)
+                }
+                ForEach(vm.logLines.suffix(8), id: \.self) { line in
+                    Text(line).font(.system(.caption, design: .monospaced)).foregroundColor(.secondary)
                 }
             }
 
-            Spacer(minLength: 6)
+            GroupBox {
+                HStack {
+                    Text("Check prime")
+                    TextField("n", text: $checkPrimeText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 160)
+                        .onReceive(Just(checkPrimeText)) { _ in checkPrimeText = checkPrimeText.filter(\.isNumber) }
+                    Button("Check") {
+                        if let n = Int(checkPrimeText) {
+                            let p = isPrimeSmall(n)
+                            vm.appendLog("Check \(n): \(p ? "prime" : "composite")")
+                        }
+                    }.buttonStyle(.bordered)
+                    if let n = Int(checkPrimeText) {
+                        Text(isPrimeSmall(n) ? "Prime" : "Composite").font(.footnote).foregroundColor(.secondary)
+                    }
+                }
+            }
         }
-        .padding(20)
-        .frame(minWidth: 760, minHeight: 640)
+        .padding(24)
+        .frame(minWidth: 820, minHeight: 520)
     }
 
-    private var canRun: Bool {
-        guard let base = UInt64(baseText), let limit = UInt64(limitText) else { return false }
-        if limit < 2 { return false }
-        // Only domain restriction: base must be prime (composite bases are outside the conjecture)
-        if !BaseVerifier.isPrime64(base) { return false }
-        return !running
+    private var header: some View {
+        VStack(spacing: 6) {
+            Text("Prime Base Verifier").font(.system(size: 28, weight: .bold))
+            Text("Digit-sum conjecture including prime powers")
+                .font(.footnote).foregroundColor(.secondary)
+            Link("Source code (GitHub)", destination: URL(string: "https://github.com/halococo/BaseVerifier")!)
+                .font(.caption)
+        }.frame(maxWidth: .infinity)
     }
 
-    private func toggle() {
-        if running {
-            vm.stop()
-            running = false
-        } else {
-            guard let base = UInt64(baseText), let limit = UInt64(limitText) else { return }
-            running = true
-            vm.start(base: base, limit: limit)
-        }
-    }
-
-    private func formattedLimit() -> String {
-        guard let n = UInt64(limitText) else { return limitText }
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        return f.string(from: NSNumber(value: n)) ?? "\(n)"
+    private func startVerification() {
+        guard let b = UInt64(baseText), let limit = UInt64(limitText) else { return }
+        vm.start(base: b, limit: limit, threads: concurrency.threads)
     }
 }
