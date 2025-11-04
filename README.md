@@ -37,8 +37,9 @@ every prime \(p\) satisfies the following property:
    - Language: **Swift**
 3. Delete the default `ContentView.swift` and `YourAppApp.swift`
 4. Add these files from the repository:
-   - `BaseVerifier.swift`
-   - `ContentView.swift`
+   - `BaseVerifierApp.swift`  
+   - `BaseVerifier.swift`  
+   - `ContentView.swift`  
 5. Press **⌘R** to build and run
 
 ---
