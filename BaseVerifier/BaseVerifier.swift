@@ -1,9 +1,11 @@
+//
 //  BaseVerifier.swift
 //  BaseVerifier
 //
 //  Created by Byul Kang
-//  Core engine: 64-bit deterministic Millerâ€“Rabin, safe 128-bit mul via fullWidth
+//  Core engine: 64-bit deterministic Miller–Rabin, safe 128-bit mul via fullWidth
 //
+
 import Foundation
 import Combine
 
@@ -15,30 +17,39 @@ final class StopBox: @unchecked Sendable {
     func get() -> Bool { lock.lock(); let v = _value; lock.unlock(); return v }
 }
 
-@MainActor
 final class BaseVerifier: ObservableObject {
 
     // MARK: - Published UI state
     @Published var progress: Double = 0.0
     @Published var primesChecked: UInt64 = 0
-    @Published var statusLine: String = ""
+    @Published var statusLine: String = "Idle"
     @Published var isRunning: Bool = false
     @Published var violationFound: Bool = false
     @Published var logLines: [String] = []
 
-    // control
+    // MARK: - Control
     private var task: Task<Void, Never>? = nil
     private let stopBox = StopBox()
 
-    // UI update cadence
+    // UI update cadence (batch size for throttling MainActor updates)
     private let stepBatch: UInt64 = 8_192
 
-    // open for ContentView "Check" button
+    /// Thread-safe log appender; always executes on the main actor.
     func appendLog(_ s: String) {
-        logLines.append(s)
-        if logLines.count > 200 { logLines.removeFirst(logLines.count - 200) }
+        Task { @MainActor in
+            self.logLines.append(s)
+            if self.logLines.count > 200 {
+                self.logLines.removeFirst(self.logLines.count - 200)
+            }
+        }
     }
 
+    /// Backward-compatible entry point (lower defaults to 2)
+    func start(base: UInt64, limit: UInt64, threads: Int) {
+        start(base: base, startFrom: 2, limit: limit, threads: threads)
+    }
+
+    /// Range-aware entry point
     func start(base: UInt64, startFrom: UInt64, limit: UInt64, threads: Int) {
         stop() // clean up previous
         progress = 0
@@ -47,7 +58,7 @@ final class BaseVerifier: ObservableObject {
         violationFound = false
         isRunning = true
         stopBox.set(false)
-        appendLog("ðŸš€ Start: base=\(base), range=\(startFrom.formatted())...\(limit.formatted()), threads=\(threads > 0 ? threads : -1)")
+        appendLog("🚀 Start: base=\(base), range=\(startFrom.formatted())...\(limit.formatted()), threads=\(threads > 0 ? threads : -1)")
 
         task = Task { await run(base: base, startFrom: startFrom, limit: limit, threads: threads) }
     }
@@ -61,9 +72,10 @@ final class BaseVerifier: ObservableObject {
     private func run(base: UInt64, startFrom: UInt64, limit: UInt64, threads: Int) async {
         // Guard against invalid ranges
         guard startFrom <= limit else {
-            await MainActor.run { self.statusLine = "âš ï¸ Invalid range: start > limit" }
+            await MainActor.run { self.statusLine = "⚠️ Invalid range: start > limit" }
             return
         }
+
         let started = Date()
         let t = threads > 0 ? threads : max(1, ProcessInfo.processInfo.activeProcessorCount)
         let totalRange = limit - startFrom + 1
@@ -88,6 +100,7 @@ final class BaseVerifier: ObservableObject {
                     var processed: UInt64 = 0
                     var localPrimes: UInt64 = 0
                     var n = start
+
                     // Handle 2 once, then scan odd numbers only for speed
                     if n <= 2 && 2 <= end {
                         if Math.isPrime64(2) {
@@ -118,17 +131,18 @@ final class BaseVerifier: ObservableObject {
                             }
                         }
 
-                        // Advance by two (odd-only) and count *range* items processed
-                        let nextN = n &+ 2
-                        // inc = number of integers consumed in [n, nextN)
-                        let inc: UInt64 = (nextN <= end + 1) ? 2 : (end &- n &+ 1)
-                        processed &+= inc
-                        n = nextN
+                        // Advance by two (odd-only). Simpler and clearer.
+                        processed &+= 2
+                        n &+= 2
+                        if n > end {
+                            let overshoot = n &- end &- 1
+                            if overshoot > 0 { processed &-= overshoot }
+                        }
 
                         if (processed % stepBatch) == 0 || n > end {
                             lock.lock()
                             globalProcessed &+= processed
-                            globalPrimes    &+= localPrimes
+                            globalPrimes &+= localPrimes
                             let raw = min(1.0, Double(globalProcessed) / Double(max(1, totalRange)))
                             if raw > lastProgress { lastProgress = raw }
                             let prog = lastProgress
@@ -150,23 +164,32 @@ final class BaseVerifier: ObservableObject {
         }
 
         let elapsed = Date().timeIntervalSince(started)
-        isRunning = false
-        progress = 1.0
+
+        await MainActor.run {
+            self.isRunning = false
+            self.progress = 1.0
+        }
 
         if stopBox.get() {
-            statusLine = "Stopped."
-            appendLog("Stopped.")
+            await MainActor.run {
+                self.statusLine = "Stopped."
+                self.appendLog("Stopped.")
+            }
             return
         }
 
         if let v = first {
-            violationFound = true
-            statusLine = "âŒ Violation: p=\(v.p)  S(p)=\(v.s)  (\(v.fac))"
-            appendLog(statusLine)
+            await MainActor.run {
+                self.violationFound = true
+                self.statusLine = "❌ Violation: p=\(v.p)  S(p)=\(v.s)  (\(v.fac))"
+                self.appendLog(self.statusLine)
+            }
         } else {
-            violationFound = false
-            statusLine = "âœ… No violations found in range \(startFrom.formatted())...\(limit.formatted())."
-            appendLog("Done in \(String(format: "%.2f", elapsed)) s â€“ primes: \(primesChecked.formatted())")
+            await MainActor.run {
+                self.violationFound = false
+                self.statusLine = "✅ No violations found in range \(startFrom.formatted())...\(limit.formatted())."
+                self.appendLog("Done in \(String(format: "%.2f", elapsed)) s – primes: \(self.primesChecked.formatted())")
+            }
         }
     }
 }
@@ -189,15 +212,19 @@ enum Math {
     }
 
     static func isSemiprimeDistinct(_ n: UInt64) -> Bool {
-        if n < 6 { return false } // 2*3
+        if n < 6 { return false }
         var m = n
         var first: UInt64? = nil
         var f: UInt64 = 2
-        while f*f <= m {
+        while f * f <= m {
             if m % f == 0 {
-                if first == nil { first = f } else { if first! == f { return false } else { m /= f; return m == 1 } }
+                if first == nil { first = f }
+                else {
+                    if first! == f { return false }
+                    else { m /= f; return m == 1 }
+                }
                 m /= f
-                while m % f == 0 { return false } // same factor repeats => prime power-like
+                while m % f == 0 { return false }
             }
             f = (f == 2) ? 3 : (f + 2)
         }
@@ -211,7 +238,7 @@ enum Math {
             var x = n; while x % 2 == 0 { x /= 2 }; return x == 1
         }
         var p: UInt64 = 3
-        while p*p <= n {
+        while p * p <= n {
             if n % p == 0 {
                 var x = n; while x % p == 0 { x /= p }; return x == 1
             }
@@ -220,7 +247,7 @@ enum Math {
         return false
     }
 
-    // Deterministic Millerâ€“Rabin for 64-bit
+    // Deterministic Miller–Rabin for 64-bit
     static func isPrime64(_ n: UInt64) -> Bool {
         if n < 2 { return false }
 
@@ -239,6 +266,7 @@ enum Math {
             let (_, r) = m.dividingFullWidth((prod.high, prod.low))
             return r
         }
+
         func modPow(_ a: UInt64, _ e: UInt64, _ m: UInt64) -> UInt64 {
             var base = a % m, exp = e, res: UInt64 = 1
             while exp > 0 {
@@ -250,10 +278,10 @@ enum Math {
         }
 
         // deterministic bases for 64-bit
-        let bases: [UInt64] = [2, 3, 5, 7, 11, 13]
+        let bases: [UInt64] = [2,3,5,7,11,13]
         for a in bases {
-            if a % n == 0 { continue }            // (harmless short-circuit)
-            var x = modPow(a, d, n)               // a,d,n are all UInt64
+            if a % n == 0 { continue }
+            var x = modPow(a, d, n)
             if x == 1 || x == n - 1 { continue }
             var r: UInt64 = 1
             var composite = true
@@ -277,7 +305,6 @@ enum Math {
             p = (p == 2) ? 3 : (p + 2)
         }
         if m > 1 { parts.append(String(m)) }
-        return "\(n) = " + parts.joined(separator: " Ã— ")
+        return "\(n) = " + parts.joined(separator: " × ")
     }
 }
-
